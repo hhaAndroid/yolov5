@@ -30,6 +30,8 @@ save_txt=False, source='data/images', update=False, view_img=False, weights='yol
 3 测试
 精度表 https://github.com/ultralytics/yolov5#pretrained-checkpoints
 
+上表是coco 评估结果。必须要安装cocoapi
+
 
 因为我们本地已经下载了 coco 图片，故只需要下载
 wget https://github.com/ultralytics/yolov5/releases/download/v1.0/coco2017labels.zip
@@ -43,25 +45,12 @@ ln -s val2017 images/val2017
 修改 data/coco.yaml
 
 
-python test.py --weights yolov5s.pt --data coco.yaml --img 640
+修改 test.py的263行，否则coco map算不了。
 
-
-Namespace(
-augment=False, batch_size=32, conf_thres=0.001,
-data='./data/coco.yaml', device='', exist_ok=False,
-half=False, imgsz=640, iou_thres=0.6, name='exp',
-project='runs/test', save_conf=False, save_hybrid=False,
-save_json=True, save_txt=False, single_cls=False,
-task='val', verbose=False, weights=['yolov5s.pt']
-)
-
-
-Class     Images     Labels          P          R     mAP@.5 mAP@.5:.95: 100%|████████████████████████████████| 157/157 [02:35<00:00,  1.01it/s]
-                 all       5000      36335      0.651      0.506      0.549      0.353
-
+必须要安装 pycocotool，否则不会调用cocoapi进行评估，性能就不是上表中的了。
 
 # 默认配置
-python test.py --data coco.yaml --img 640 --conf 0.001 --iou 0.65
+python test.py --weights yolov5s.pt --data coco.yaml --img 640 --iou 0.65 --half
 
 
 Namespace(
@@ -73,8 +62,23 @@ save_json=True, save_txt=False, single_cls=False, task='val',
 verbose=False, weights='yolov5s.pt'
 )
 
-Class     Images     Labels          P          R     mAP@.5 mAP@.5:.95: 100%|████████████████████████████████| 157/157 [01:15<00:00,  2.08it/s]
-                all       5000      36335      0.669      0.494      0.546      0.351
+
+pip install pycocotools
+
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.367
+ Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=100 ] = 0.554
+ Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=100 ] = 0.398
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.222
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.419
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.462
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ] = 0.305
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ] = 0.518
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.575
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.390
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.641
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.715
+
+
 
 
 Speed: 0.2ms pre-process, 5.2ms inference, 1.9ms NMS per image at shape (32, 3, 640, 640)
