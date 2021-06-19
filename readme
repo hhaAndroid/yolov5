@@ -1,0 +1,90 @@
+1 环境安装
+
+conda create -n pytorch171_py38 python=3.8
+# 应该没有问题的呀，但是在本机电脑会自动安装cpu的，非常神奇
+conda install pytorch==1.7.1 torchvision==0.8.2 cudatoolkit=10.1 -c pytorch
+# 换成pip
+pip install torch==1.7.1+cu101 torchvision==0.8.2+cu101 -f https://download.pytorch.org/whl/torch_stable.html
+
+
+# 如果直接安装会忽略我上面已经安装好的pytorch
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 故替换为如下 requirements
+pip install -r requirements_me.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+
+2 检测
+python detect.py 基于 data/images 下图片自动下载 yolov5s.pt 进行推理
+
+
+Namespace(
+agnostic_nms=False, augment=False, classes=None, conf_thres=0.25,
+device='', exist_ok=False, half=False, hide_conf=False, hide_labels=False,
+imgsz=640, iou_thres=0.45, line_thickness=3, max_det=1000, name='exp',
+nosave=False, project='runs/detect', save_conf=False, save_crop=False,
+save_txt=False, source='data/images', update=False, view_img=False, weights='yolov5s.pt'
+)
+
+
+3 测试
+精度表 https://github.com/ultralytics/yolov5#pretrained-checkpoints
+
+
+因为我们本地已经下载了 coco 图片，故只需要下载
+wget https://github.com/ultralytics/yolov5/releases/download/v1.0/coco2017labels.zip
+
+放置到 /home/hha/dataset/coco 下，解压
+cd coco
+mkdir images
+ln -s train2017 images/train2017
+ln -s val2017 images/val2017
+
+修改 data/coco.yaml
+
+
+python test.py --weights yolov5s.pt --data coco.yaml --img 640
+
+
+Namespace(
+augment=False, batch_size=32, conf_thres=0.001,
+data='./data/coco.yaml', device='', exist_ok=False,
+half=False, imgsz=640, iou_thres=0.6, name='exp',
+project='runs/test', save_conf=False, save_hybrid=False,
+save_json=True, save_txt=False, single_cls=False,
+task='val', verbose=False, weights=['yolov5s.pt']
+)
+
+
+Class     Images     Labels          P          R     mAP@.5 mAP@.5:.95: 100%|████████████████████████████████| 157/157 [02:35<00:00,  1.01it/s]
+                 all       5000      36335      0.651      0.506      0.549      0.353
+
+
+# 默认配置
+python test.py --data coco.yaml --img 640 --conf 0.001 --iou 0.65
+
+
+Namespace(
+augment=False, batch_size=32, conf_thres=0.001,
+data='./data/coco.yaml', device='', exist_ok=False,
+half=False, imgsz=640, iou_thres=0.65, name='exp',
+project='runs/test', save_conf=False, save_hybrid=False,
+save_json=True, save_txt=False, single_cls=False, task='val',
+verbose=False, weights='yolov5s.pt'
+)
+
+Class     Images     Labels          P          R     mAP@.5 mAP@.5:.95: 100%|████████████████████████████████| 157/157 [01:15<00:00,  2.08it/s]
+                all       5000      36335      0.669      0.494      0.546      0.351
+
+
+Speed: 0.2ms pre-process, 5.2ms inference, 1.9ms NMS per image at shape (32, 3, 640, 640)
+
+
+4 训练
+
+# 默认训练是单卡
+python train.py --data coco.yaml --cfg yolov5s.yaml --weights '' --batch-size 64
+
+
+
+
