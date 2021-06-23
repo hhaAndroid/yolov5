@@ -17,7 +17,6 @@ pip install -r requirements_me.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 2 检测
 python detect.py 基于 data/images 下图片自动下载 yolov5s.pt 进行推理
 
-
 Namespace(
 agnostic_nms=False, augment=False, classes=None, conf_thres=0.25,
 device='', exist_ok=False, half=False, hide_conf=False, hide_labels=False,
@@ -50,7 +49,7 @@ ln -s val2017 images/val2017
 必须要安装 pycocotool，否则不会调用cocoapi进行评估，性能就不是上表中的了。
 
 # 默认配置
-python test.py --weights yolov5s.pt --data coco.yaml --img 640 --iou 0.65 --half
+python test.py --weights yolov5s.pt --data coco.yaml --img 640 --iou 0.65
 
 
 Namespace(
@@ -65,23 +64,87 @@ verbose=False, weights='yolov5s.pt'
 
 pip install pycocotools
 
+batch=32
+
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.367
+ Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=100 ] = 0.555
+ Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=100 ] = 0.398
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.223
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.419
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.462
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ] = 0.306
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ] = 0.518
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.576
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.391
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.641
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.716
+
+
+batch=1
+
  Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.367
  Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=100 ] = 0.554
- Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=100 ] = 0.398
- Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.222
+ Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=100 ] = 0.399
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.223
  Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.419
  Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.462
  Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ] = 0.305
  Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ] = 0.518
  Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.575
- Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.390
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.391
  Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.641
  Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.715
 
 
+batch=1 去掉多尺度测试
+
+# img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
+img, ratio, pad = letterbox(img, auto=False, scaleup=self.augment)
+
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.365
+ Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=100 ] = 0.552
+ Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=100 ] = 0.395
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.221
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.418
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.459
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ] = 0.305
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ] = 0.518
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.576
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.399
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.639
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.710
 
 
-Speed: 0.2ms pre-process, 5.2ms inference, 1.9ms NMS per image at shape (32, 3, 640, 640)
+# img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
+img, ratio, pad = letterbox(img, auto=True, scaleup=self.augment)
+
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.365
+ Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=100 ] = 0.550
+ Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=100 ] = 0.396
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.222
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.416
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.461
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ] = 0.304
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ] = 0.519
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.576
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.396
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.640
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.713
+
+
+
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.363
+ Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=100 ] = 0.548
+ Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=100 ] = 0.394
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.213
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.415
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.468
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ] = 0.303
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ] = 0.516
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.572
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=100 ] = 0.387
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ] = 0.637
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.716
 
 
 4 训练
