@@ -3,7 +3,7 @@
 Usage:
     $ python path/to/train.py --data coco128.yaml --weights yolov5s.pt --img 640
 """
-
+import datetime
 import argparse
 import logging
 import os
@@ -14,7 +14,8 @@ import warnings
 from copy import deepcopy
 from pathlib import Path
 from threading import Thread
-
+from mmcv import get_logger
+from mmcv.runner import LogBuffer
 import math
 import numpy as np
 import torch.distributed as dist
@@ -46,8 +47,9 @@ from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
 from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, de_parallel
 from utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
 from utils.metrics import fitness
+import mmcv
 
-logger = logging.getLogger(__name__)
+train_logger = logging.getLogger(__name__)
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
@@ -61,6 +63,11 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         opt.save_dir, opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.evolve, opt.data, opt.cfg, \
         opt.resume, opt.notest, opt.nosave, opt.workers
 
+    log_buffer = LogBuffer()
+
+    mmcv.mkdir_or_exist(opt.save_dir)
+    train_logger = get_logger(name='train_log', log_file=f"{opt.save_dir}/train_log.log", log_level=logging.INFO)
+
     # Directories
     save_dir = Path(save_dir)
     wdir = save_dir / 'weights'
@@ -73,7 +80,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     if isinstance(hyp, str):
         with open(hyp) as f:
             hyp = yaml.safe_load(f)  # load hyps dict
-    logger.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
+    train_logger.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
 
     # Save run settings
     with open(save_dir / 'hyp.yaml', 'w') as f:
@@ -94,7 +101,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         # TensorBoard
         if not evolve:
             prefix = colorstr('tensorboard: ')
-            logger.info(f"{prefix}Start with 'tensorboard --logdir {opt.project}', view at http://localhost:6006/")
+            train_logger.info(
+                f"{prefix}Start with 'tensorboard --logdir {opt.project}', view at http://localhost:6006/")
             loggers['tb'] = SummaryWriter(str(save_dir))
 
         # W&B
@@ -123,7 +131,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         state_dict = ckpt['model'].float().state_dict()  # to FP32
         state_dict = intersect_dicts(state_dict, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(state_dict, strict=False)  # load
-        logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
+        train_logger.info(
+            'Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
     with torch_distributed_zero_first(RANK):
@@ -143,7 +152,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     nbs = 64  # nominal batch size
     accumulate = max(round(nbs / batch_size), 1)  # accumulate loss before optimizing
     hyp['weight_decay'] *= batch_size * accumulate / nbs  # scale weight_decay
-    logger.info(f"Scaled weight_decay = {hyp['weight_decay']}")
+    train_logger.info(f"Scaled weight_decay = {hyp['weight_decay']}")
 
     pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
     for k, v in model.named_modules():
@@ -161,7 +170,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
 
     optimizer.add_param_group({'params': pg1, 'weight_decay': hyp['weight_decay']})  # add pg1 with weight_decay
     optimizer.add_param_group({'params': pg2})  # add pg2 (biases)
-    logger.info('Optimizer groups: %g .bias, %g conv.weight, %g other' % (len(pg2), len(pg1), len(pg0)))
+    train_logger.info('Optimizer groups: %g .bias, %g conv.weight, %g other' % (len(pg2), len(pg1), len(pg0)))
     del pg0, pg1, pg2
 
     # Scheduler https://arxiv.org/pdf/1812.01187.pdf
@@ -174,7 +183,12 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     # plot_lr_scheduler(optimizer, scheduler, epochs)
 
     # EMA
-    ema = ModelEMA(model) if RANK in [-1, 0] else None
+    if opt.ema:
+        ema = ModelEMA(model) if RANK in [-1, 0] else None
+    else:
+        ema = None
+
+    time_sec_tot = 0
 
     # Resume
     start_epoch, best_fitness = 0, 0.0
@@ -198,8 +212,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         if resume:
             assert start_epoch > 0, '%s training to %g epochs is finished, nothing to resume.' % (weights, epochs)
         if epochs < start_epoch:
-            logger.info('%s has been trained for %g epochs. Fine-tuning for %g additional epochs.' %
-                        (weights, ckpt['epoch'], epochs))
+            train_logger.info('%s has been trained for %g epochs. Fine-tuning for %g additional epochs.' %
+                              (weights, ckpt['epoch'], epochs))
             epochs += ckpt['epoch']  # finetune additional epochs
 
         del ckpt, state_dict
@@ -218,7 +232,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     # SyncBatchNorm
     if opt.sync_bn and cuda and RANK != -1:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
-        logger.info('Using SyncBatchNorm()')
+        train_logger.info('Using SyncBatchNorm()')
 
     # Trainloader
     dataloader, dataset = create_dataloader(train_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
@@ -274,12 +288,15 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     maps = np.zeros(nc)  # mAP per class
     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
     scheduler.last_epoch = start_epoch - 1  # do not move
-    scaler = amp.GradScaler(enabled=cuda)
+    if opt.amp:
+        scaler = amp.GradScaler(enabled=cuda)
+    else:
+        scaler = None
     compute_loss = ComputeLoss(model)  # init loss class
-    logger.info(f'Image sizes {imgsz} train, {imgsz_test} test\n'
-                f'Using {dataloader.num_workers} dataloader workers\n'
-                f'Logging results to {save_dir}\n'
-                f'Starting training for {epochs} epochs...')
+    train_logger.info(f'Image sizes {imgsz} train, {imgsz_test} test\n'
+                      f'Using {dataloader.num_workers} dataloader workers\n'
+                      f'Logging results to {save_dir}\n'
+                      f'Starting training for {epochs} epochs...')
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()
 
@@ -305,11 +322,15 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         if RANK != -1:
             dataloader.sampler.set_epoch(epoch)
         pbar = enumerate(dataloader)
-        logger.info(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'labels', 'img_size'))
-        if RANK in [-1, 0]:
-            pbar = tqdm(pbar, total=nb)  # progress bar
+        train_logger.info(
+            ('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'labels', 'img_size'))
+        # if RANK in [-1, 0]:
+        #     pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
+
+        interval_start = time.time()
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+            datatime = time.time() - interval_start
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
 
@@ -333,7 +354,18 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                     imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
 
             # Forward
-            with amp.autocast(enabled=cuda):
+            if opt.amp:
+                with amp.autocast(enabled=cuda):
+                    pred = model(imgs)  # forward
+                    loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+                    if RANK != -1:
+                        loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
+                    if opt.quad:
+                        loss *= 4.
+                # Backward
+                scaler.scale(loss).backward()
+
+            else:
                 pred = model(imgs)  # forward
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
                 if RANK != -1:
@@ -341,37 +373,57 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 if opt.quad:
                     loss *= 4.
 
-            # Backward
-            scaler.scale(loss).backward()
+                # Backward
+                loss.backward()
 
             # Optimize
             if ni - last_opt_step >= accumulate:
-                scaler.step(optimizer)  # optimizer.step
-                scaler.update()
+                if opt.amp:
+                    scaler.step(optimizer)  # optimizer.step
+                    scaler.update()
+                else:
+                    optimizer.step()
                 optimizer.zero_grad()
                 if ema:
                     ema.update(model)
                 last_opt_step = ni
 
+            itertime = time.time() - interval_start
+            log_buffer.update(dict(data_time=datatime, iter_time=itertime))
+            interval_start = time.time()
             # Print
             if RANK in [-1, 0]:
-                mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
-                mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-                s = ('%10s' * 2 + '%10.4g' * 6) % (
-                    f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1])
-                pbar.set_description(s)
+                if i % opt.interval == 0 and i != 0:
+                    log_buffer.average(opt.interval)
+                    iter_time = log_buffer.output['iter_time']
+                    data_time = log_buffer.output['data_time']
 
-                # Plot
-                if plots and ni < 3:
-                    f = save_dir / f'train_batch{ni}.jpg'  # filename
-                    Thread(target=plot_images, args=(imgs, targets, paths, f), daemon=True).start()
-                    if loggers['tb'] and ni == 0:  # TensorBoard
-                        with warnings.catch_warnings():
-                            warnings.simplefilter('ignore')  # suppress jit trace warning
-                            loggers['tb'].add_graph(torch.jit.trace(de_parallel(model), imgs[0:1], strict=False), [])
-                elif plots and ni == 10 and loggers['wandb']:
-                    wandb_logger.log({'Mosaics': [loggers['wandb'].Image(str(x), caption=x.name) for x in
-                                                  save_dir.glob('train*.jpg') if x.exists()]})
+                    time_sec_tot += (iter_time * opt.interval)
+                    time_sec_avg = time_sec_tot / (ni - 0 + 1)
+                    eta_sec = time_sec_avg * (nb*epochs - ni - 1)
+                    eta_str = str(datetime.timedelta(seconds=int(eta_sec)))
+
+                    # eta = (nb * epochs - ni) * iter_time
+                    # eta_str = str(datetime.timedelta(seconds=int(eta)))
+                    train_logger.info(f'eta: {eta_str}, data_time: {round(data_time,5)}, time: {round(iter_time,3)}')
+
+                # mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
+                # mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
+                # s = ('%10s' * 2 + '%10.4g' * 6) % (
+                #     f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1])
+                # pbar.set_description(s)
+                #
+                # # Plot
+                # if plots and ni < 3:
+                #     f = save_dir / f'train_batch{ni}.jpg'  # filename
+                #     Thread(target=plot_images, args=(imgs, targets, paths, f), daemon=True).start()
+                #     if loggers['tb'] and ni == 0:  # TensorBoard
+                #         with warnings.catch_warnings():
+                #             warnings.simplefilter('ignore')  # suppress jit trace warning
+                #             loggers['tb'].add_graph(torch.jit.trace(de_parallel(model), imgs[0:1], strict=False), [])
+                # elif plots and ni == 10 and loggers['wandb']:
+                #     wandb_logger.log({'Mosaics': [loggers['wandb'].Image(str(x), caption=x.name) for x in
+                #                                   save_dir.glob('train*.jpg') if x.exists()]})
 
             # end batch ------------------------------------------------------------------------------------------------
 
@@ -443,7 +495,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         # end epoch ----------------------------------------------------------------------------------------------------
     # end training -----------------------------------------------------------------------------------------------------
     if RANK in [-1, 0]:
-        logger.info(f'{epoch - start_epoch + 1} epochs completed in {(time.time() - t0) / 3600:.3f} hours.\n')
+        train_logger.info(f'{epoch - start_epoch + 1} epochs completed in {(time.time() - t0) / 3600:.3f} hours.\n')
         if plots:
             plot_results(save_dir=save_dir)  # save as results.png
             if loggers['wandb']:
@@ -485,7 +537,7 @@ def parse_opt(known=False):
     parser.add_argument('--data', type=str, default='data/coco128.yaml', help='dataset.yaml path')
     parser.add_argument('--hyp', type=str, default='data/hyps/hyp.scratch.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=300)
-    parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs')
+    parser.add_argument('--batch-size', type=int, default=8, help='total batch size for all GPUs')
     parser.add_argument('--img-size', nargs='+', type=int, default=[640, 640], help='[train, test] image sizes')
     parser.add_argument('--rect', action='store_true', help='rectangular training')
     parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
@@ -514,6 +566,9 @@ def parse_opt(known=False):
     parser.add_argument('--save_period', type=int, default=-1, help='Log model after every "save_period" epoch')
     parser.add_argument('--artifact_alias', type=str, default="latest", help='version of dataset artifact to be used')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
+    parser.add_argument('--interval', type=int, default=30, help='DDP parameter, do not modify')
+    parser.add_argument('--amp', type=bool, default=False, help='DDP parameter, do not modify')
+    parser.add_argument('--ema', type=bool, default=True, help='DDP parameter, do not modify')
     opt = parser.parse_known_args()[0] if known else parser.parse_args()
     return opt
 
@@ -533,7 +588,7 @@ def main(opt):
         with open(Path(ckpt).parent.parent / 'opt.yaml') as f:
             opt = argparse.Namespace(**yaml.safe_load(f))  # replace
         opt.cfg, opt.weights, opt.resume = '', ckpt, True  # reinstate
-        logger.info('Resuming training from %s' % ckpt)
+        train_logger.info('Resuming training from %s' % ckpt)
     else:
         # opt.hyp = opt.hyp or ('hyp.finetune.yaml' if opt.weights else 'hyp.scratch.yaml')
         opt.data, opt.cfg, opt.hyp = check_file(opt.data), check_file(opt.cfg), check_file(opt.hyp)  # check files
