@@ -405,7 +405,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
 
                     # eta = (nb * epochs - ni) * iter_time
                     # eta_str = str(datetime.timedelta(seconds=int(eta)))
-                    train_logger.info(f'eta: {eta_str}, data_time: {round(data_time,5)}, time: {round(iter_time,3)}')
+                    train_logger.info(f'[{i}/{epoch}] eta: {eta_str}, data_time: {round(data_time,5)}, time: {round(iter_time,3)}')
 
                 # mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 # mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
