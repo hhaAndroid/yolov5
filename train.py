@@ -19,9 +19,8 @@ import random
 import sys
 import time
 from copy import deepcopy
-from datetime import datetime
 from pathlib import Path
-
+import datetime
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -56,7 +55,6 @@ from utils.loss import ComputeLoss
 from utils.metrics import fitness
 from utils.plots import plot_evolve, plot_labels
 from utils.torch_utils import EarlyStopping, ModelEMA, de_parallel, select_device, torch_distributed_zero_first
-import datetime
 from mmcv.runner import LogBuffer
 
 # srun
@@ -68,7 +66,7 @@ ntasks = int(os.environ['SLURM_NTASKS'])
 node_list = os.environ['SLURM_NODELIST']
 
 addr = subprocess.getoutput(
-        f'scontrol show hostname {node_list} | head -n1')
+    f'scontrol show hostname {node_list} | head -n1')
 os.environ['MASTER_PORT'] = '29500'
 if 'MASTER_ADDR' not in os.environ:
     os.environ['MASTER_ADDR'] = addr
@@ -314,6 +312,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     scheduler.last_epoch = start_epoch - 1  # do not move
 
     time_sec_tot = 0
+    eval_interval = 1
 
     if opt.amp:
         scaler = amp.GradScaler(enabled=cuda)
@@ -352,7 +351,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
         interval_start = time.time()
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
-            datatime = time.time() - interval_start
+            data_time = time.time() - interval_start
 
             callbacks.run('on_train_batch_start')
             ni = i + nb * epoch  # number integrated batches (since train start)
@@ -416,7 +415,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 last_opt_step = ni
 
             itertime = time.time() - interval_start
-            log_buffer.update(dict(data_time=datatime, iter_time=itertime))
+            log_buffer.update(dict(data_time=data_time, iter_time=itertime))
             interval_start = time.time()
 
             # Log
@@ -427,7 +426,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                                      (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
                 callbacks.run('on_train_batch_end', ni, model, imgs, targets, paths, False)
 
-                if (i+1) % 50 == 0:
+                if (i + 1) % 50 == 0:
                     log_buffer.average(50)
                     iter_time = log_buffer.output['iter_time']
                     data_time = log_buffer.output['data_time']
@@ -455,16 +454,17 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
             final_epoch = (epoch + 1 == epochs) or stopper.possible_stop
             if not noval or final_epoch:  # Calculate mAP
-                results, maps, _ = val.run(data_dict,
-                                           batch_size=batch_size // WORLD_SIZE * 2,
-                                           imgsz=imgsz,
-                                           model=ema.ema,
-                                           single_cls=single_cls,
-                                           dataloader=val_loader,
-                                           save_dir=save_dir,
-                                           plots=False,
-                                           callbacks=callbacks,
-                                           compute_loss=compute_loss)
+                if (epoch + 1) % eval_interval == 0 or final_epoch:
+                    results, maps, _ = val.run(data_dict,
+                                               batch_size=batch_size // WORLD_SIZE * 2,
+                                               imgsz=imgsz,
+                                               model=ema.ema,
+                                               single_cls=single_cls,
+                                               dataloader=val_loader,
+                                               save_dir=save_dir,
+                                               plots=False,
+                                               callbacks=callbacks,
+                                               compute_loss=compute_loss)
 
             # Update best mAP
             fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
@@ -483,7 +483,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                     'updates': ema.updates,
                     'optimizer': optimizer.state_dict(),
                     'wandb_id': loggers.wandb.wandb_run.id if loggers.wandb else None,
-                    'date': datetime.now().isoformat()}
+                    'date': datetime.datetime.now().isoformat()}
 
                 # Save last, best and delete
                 torch.save(ckpt, last)
