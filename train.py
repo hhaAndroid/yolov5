@@ -61,9 +61,18 @@ from mmcv.runner import LogBuffer
 
 # srun
 import os
+import subprocess
 
 proc_id = int(os.environ['SLURM_PROCID'])
 ntasks = int(os.environ['SLURM_NTASKS'])
+node_list = os.environ['SLURM_NODELIST']
+
+addr = subprocess.getoutput(
+        f'scontrol show hostname {node_list} | head -n1')
+os.environ['MASTER_PORT'] = '29500'
+if 'MASTER_ADDR' not in os.environ:
+    os.environ['MASTER_ADDR'] = addr
+
 os.environ['WORLD_SIZE'] = str(ntasks)
 os.environ['LOCAL_RANK'] = str(proc_id)
 os.environ['RANK'] = str(proc_id)
