@@ -1,0 +1,1 @@
+train.py --data coco.yaml --batch 4 --weights '' --cfg yolov5s.yaml --epochs 300 --img 640 --hyp hyp.scratch-low.yaml

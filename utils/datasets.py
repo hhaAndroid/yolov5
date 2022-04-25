@@ -17,6 +17,7 @@ from pathlib import Path
 from threading import Thread
 from urllib.parse import urlparse
 from zipfile import ZipFile
+import mmcv
 
 import numpy as np
 import torch
@@ -85,7 +86,7 @@ def exif_transpose(image):
             5: Image.TRANSPOSE,
             6: Image.ROTATE_270,
             7: Image.TRANSVERSE,
-            8: Image.ROTATE_90,}.get(orientation)
+            8: Image.ROTATE_90, }.get(orientation)
         if method is not None:
             image = image.transpose(method)
             del exif[0x0112]
@@ -422,6 +423,18 @@ class LoadImagesAndLabels(Dataset):
         self.path = path
         self.albumentations = Albumentations() if augment else None
 
+        use_ceph = False
+
+        if use_ceph:
+            file_client_args = dict(
+                backend='petrel',
+                path_mapping=dict({
+                    '/mnt/lustre/share_data/huanghaian/coco_data/image/': 's3://openmmlab/datasets/detection/coco/'
+                }))
+        else:
+            file_client_args = dict(backend='disk')
+        self.file_client = mmcv.FileClient(**file_client_args)
+
         try:
             f = []  # image files
             for p in path if isinstance(path, list) else [path]:
@@ -446,12 +459,13 @@ class LoadImagesAndLabels(Dataset):
         # Check cache
         self.label_files = img2label_paths(self.im_files)  # labels
         cache_path = (p if p.is_file() else Path(self.label_files[0]).parent).with_suffix('.cache')
-        try:
-            cache, exists = np.load(cache_path, allow_pickle=True).item(), True  # load dict
-            assert cache['version'] == self.cache_version  # same version
-            assert cache['hash'] == get_hash(self.label_files + self.im_files)  # same hash
-        except Exception:
-            cache, exists = self.cache_labels(cache_path, prefix), False  # cache
+        cache, exists = np.load(cache_path, allow_pickle=True).item(), True  # load dict
+        # try:
+        #     cache, exists = np.load(cache_path, allow_pickle=True).item(), True  # load dict
+        #     # assert cache['version'] == self.cache_version  # same version
+        #     # assert cache['hash'] == get_hash(self.label_files + self.im_files)  # same hash
+        # except Exception:
+        #     cache, exists = self.cache_labels(cache_path, prefix), False  # cache
 
         # Display cache
         nf, nm, ne, nc, n = cache.pop('results')  # found, missing, empty, corrupt, total
@@ -660,7 +674,11 @@ class LoadImagesAndLabels(Dataset):
             if fn.exists():  # load npy
                 im = np.load(fn)
             else:  # read image
-                im = cv2.imread(f)  # BGR
+                if self.file_client:
+                    img_bytes = self.file_client.get(f)
+                    im = mmcv.imfrombytes(img_bytes)
+                else:
+                    im = cv2.imread(f)  # BGR
                 assert im is not None, f'Image Not Found {f}'
             h0, w0 = im.shape[:2]  # orig hw
             r = self.img_size / max(h0, w0)  # ratio
