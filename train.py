@@ -299,7 +299,12 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     maps = np.zeros(nc)  # mAP per class
     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
     scheduler.last_epoch = start_epoch - 1  # do not move
-    scaler = amp.GradScaler(enabled=cuda)
+
+    if opt.amp:
+        scaler = amp.GradScaler(enabled=cuda)
+    else:
+        scaler = None
+
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
     callbacks.run('on_train_start')
@@ -354,7 +359,20 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                     imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
 
             # Forward
-            with amp.autocast(enabled=cuda):
+            # Forward
+            if opt.amp:
+                with amp.autocast(enabled=cuda):
+                    pred = model(imgs)  # forward
+                    loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+                    if RANK != -1:
+                        loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
+                    if opt.quad:
+                        loss *= 4.
+
+                    # Backward
+                    scaler.scale(loss).backward()
+
+            else:
                 pred = model(imgs)  # forward
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
                 if RANK != -1:
@@ -362,13 +380,17 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 if opt.quad:
                     loss *= 4.
 
-            # Backward
-            scaler.scale(loss).backward()
+                # Backward
+                loss.backward()
 
             # Optimize
             if ni - last_opt_step >= accumulate:
-                scaler.step(optimizer)  # optimizer.step
-                scaler.update()
+                if opt.amp:
+                    scaler.step(optimizer)  # optimizer.step
+                    scaler.update()
+                else:
+                    optimizer.step()
+
                 optimizer.zero_grad()
                 if ema:
                     ema.update(model)
@@ -515,6 +537,7 @@ def parse_opt(known=False):
     parser.add_argument('--patience', type=int, default=100, help='EarlyStopping patience (epochs without improvement)')
     parser.add_argument('--freeze', nargs='+', type=int, default=[0], help='Freeze layers: backbone=10, first3=0 1 2')
     parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
+    parser.add_argument('--amp', type=bool, default=False, help='DDP parameter, do not modify')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
 
     # Weights & Biases arguments
