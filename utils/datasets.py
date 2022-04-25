@@ -429,7 +429,7 @@ class LoadImagesAndLabels(Dataset):
             file_client_args = dict(
                 backend='petrel',
                 path_mapping=dict({
-                    '/mnt/lustre/share_data/huanghaian/coco_data/image/': 's3://openmmlab/datasets/detection/coco/'
+                    '/home/PJLAB/huanghaian/dataset/coco/yolov5_coco/images/': 's3://openmmlab/datasets/detection/coco/'
                 }))
         else:
             file_client_args = dict(backend='disk')
