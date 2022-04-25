@@ -62,6 +62,8 @@ class Loggers():
         for k in LOGGERS:
             setattr(self, k, None)  # init empty logger dictionary
         self.csv = True  # always log to csv
+        self.tb = None
+        self.wandb = None
 
         # Message
         if not wandb:
