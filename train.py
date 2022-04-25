@@ -51,11 +51,13 @@ from utils.general import (LOGGER, check_dataset, check_file, check_git_status, 
                            intersect_dicts, is_ascii, labels_to_class_weights, labels_to_image_weights, methods,
                            one_cycle, print_args, print_mutation, strip_optimizer)
 from utils.loggers import Loggers
-from utils.loggers.wandb.wandb_utils import check_wandb_resume
+# from utils.loggers.wandb.wandb_utils import check_wandb_resume
 from utils.loss import ComputeLoss
 from utils.metrics import fitness
 from utils.plots import plot_evolve, plot_labels
 from utils.torch_utils import EarlyStopping, ModelEMA, de_parallel, select_device, torch_distributed_zero_first
+import datetime
+from mmcv.runner import LogBuffer
 
 # srun
 import os
@@ -76,6 +78,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.evolve, opt.data, opt.cfg, \
         opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze
     callbacks.run('on_pretrain_routine_start')
+
+    log_buffer = LogBuffer()
 
     # Directories
     w = save_dir / 'weights'  # weights dir
@@ -300,6 +304,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
     scheduler.last_epoch = start_epoch - 1  # do not move
 
+    time_sec_tot = 0
+
     if opt.amp:
         scaler = amp.GradScaler(enabled=cuda)
     else:
@@ -334,7 +340,11 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         if RANK in (-1, 0):
             pbar = tqdm(pbar, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
         optimizer.zero_grad()
+
+        interval_start = time.time()
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+            datatime = time.time() - interval_start
+
             callbacks.run('on_train_batch_start')
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
@@ -396,6 +406,10 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                     ema.update(model)
                 last_opt_step = ni
 
+            itertime = time.time() - interval_start
+            log_buffer.update(dict(data_time=datatime, iter_time=itertime))
+            interval_start = time.time()
+
             # Log
             if RANK in (-1, 0):
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
@@ -403,6 +417,21 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 pbar.set_description(('%10s' * 2 + '%10.4g' * 5) %
                                      (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
                 callbacks.run('on_train_batch_end', ni, model, imgs, targets, paths, False)
+
+                if (i+1) % 50 == 0:
+                    log_buffer.average(50)
+                    iter_time = log_buffer.output['iter_time']
+                    data_time = log_buffer.output['data_time']
+
+                    time_sec_tot += (iter_time * 50)
+                    time_sec_avg = time_sec_tot / (ni - 0 + 1)
+                    eta_sec = time_sec_avg * (nb * epochs - ni - 1)
+                    eta_str = str(datetime.timedelta(seconds=int(eta_sec)))
+
+                    # eta = (nb * epochs - ni) * iter_time
+                    # eta_str = str(datetime.timedelta(seconds=int(eta)))
+                    LOGGER.info(f'eta: {eta_str}, data_time: {round(data_time, 5)}, time: {round(iter_time, 3)}')
+
                 if callbacks.stop_training:
                     return
             # end batch ------------------------------------------------------------------------------------------------
@@ -558,7 +587,7 @@ def main(opt, callbacks=Callbacks()):
         check_requirements(exclude=['thop'])
 
     # Resume
-    if opt.resume and not check_wandb_resume(opt) and not opt.evolve:  # resume an interrupted run
+    if opt.resume and not opt.evolve:  # resume an interrupted run
         ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         with open(Path(ckpt).parent.parent / 'opt.yaml', errors='ignore') as f:

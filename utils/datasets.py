@@ -423,7 +423,7 @@ class LoadImagesAndLabels(Dataset):
         self.path = path
         self.albumentations = Albumentations() if augment else None
 
-        use_ceph = False
+        use_ceph = True
 
         if use_ceph:
             file_client_args = dict(
