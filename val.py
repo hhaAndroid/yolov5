@@ -158,7 +158,7 @@ def run(
     # Configure
     model.eval()
     cuda = device.type != 'cpu'
-    is_coco = isinstance(data.get('val'), str) and data['val'].endswith(f'coco{os.sep}val2017.txt')  # COCO dataset
+    is_coco = True  # COCO dataset
     nc = 1 if single_cls else int(data['nc'])  # number of classes
     iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
@@ -266,21 +266,21 @@ def run(
         callbacks.run('on_val_batch_end')
 
     # Compute metrics
-    stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
-    if len(stats) and stats[0].any():
-        # tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
-        # ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-        # mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
-        nt = np.bincount(stats[3].astype(np.int64), minlength=nc)  # number of targets per class
-    else:
-        nt = torch.zeros(1)
+    # stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
+    # if len(stats) and stats[0].any():
+    #     # tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
+    #     # ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+    #     # mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
+    #     nt = np.bincount(stats[3].astype(np.int64), minlength=nc)  # number of targets per class
+    # else:
+    #     nt = torch.zeros(1)
 
     # Print results
-    pf = '%20s' + '%11i' * 2 + '%11.3g' * 4  # print format
-    if logger is not None:
-        logger.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
-    else:
-        LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
+    # pf = '%20s' + '%11i' * 2 + '%11.3g' * 4  # print format
+    # if logger is not None:
+    #     logger.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
+    # else:
+    #     LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
 
     # Print results per class
     # if (verbose or (nc < 50 and not training)) and nc > 1 and len(stats):
@@ -328,6 +328,8 @@ def run(
             eval.summarize()
         if logger is not None:
             logger.info(redirect_string.getvalue())
+        else:
+            LOGGER.info(redirect_string.getvalue())
 
         map, map50 = eval.stats[:2]  # update results (mAP@0.5:0.95, mAP@0.5)
 
