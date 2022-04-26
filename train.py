@@ -317,7 +317,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     scheduler.last_epoch = start_epoch - 1  # do not move
 
     time_sec_tot = 0
-    eval_interval = 1
+    eval_interval = 10
     log_interval = 50
 
     if opt.amp:
