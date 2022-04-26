@@ -56,6 +56,7 @@ from utils.metrics import fitness
 from utils.plots import plot_evolve, plot_labels
 from utils.torch_utils import EarlyStopping, ModelEMA, de_parallel, select_device, torch_distributed_zero_first
 from mmcv.runner import LogBuffer
+from mmcv import get_logger
 
 # srun
 import os
@@ -87,6 +88,10 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     callbacks.run('on_pretrain_routine_start')
 
     log_buffer = LogBuffer()
+    timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+    os.makedirs(save_dir, exist_ok=True)
+    log_file = os.path.join(save_dir, f'{timestamp}.log')
+    logger = get_logger(name='yolov5', log_file=log_file)
 
     # Directories
     w = save_dir / 'weights'  # weights dir
@@ -97,7 +102,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     if isinstance(hyp, str):
         with open(hyp, errors='ignore') as f:
             hyp = yaml.safe_load(f)  # load hyps dict
-    LOGGER.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
+    logger.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
 
     # Save run settings
     if not evolve:
@@ -168,7 +173,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     nbs = 64  # nominal batch size
     accumulate = max(round(nbs / batch_size), 1)  # accumulate loss before optimizing
     hyp['weight_decay'] *= batch_size * accumulate / nbs  # scale weight_decay
-    LOGGER.info(f"Scaled weight_decay = {hyp['weight_decay']}")
+    logger.info(f"Scaled weight_decay = {hyp['weight_decay']}")
 
     g = [], [], []  # optimizer parameter groups
     bn = tuple(v for k, v in nn.__dict__.items() if 'Norm' in k)  # normalization layers, i.e. BatchNorm2d()
@@ -189,7 +194,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
     optimizer.add_param_group({'params': g[0], 'weight_decay': hyp['weight_decay']})  # add g0 with weight_decay
     optimizer.add_param_group({'params': g[1]})  # add g1 (BatchNorm2d weights)
-    LOGGER.info(f"{colorstr('optimizer:')} {type(optimizer).__name__} with parameter groups "
+    logger.info(f"{colorstr('optimizer:')} {type(optimizer).__name__} with parameter groups "
                 f"{len(g[1])} weight (no decay), {len(g[0])} weight, {len(g[2])} bias")
     del g
 
@@ -221,21 +226,21 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         if resume:
             assert start_epoch > 0, f'{weights} training to {epochs} epochs is finished, nothing to resume.'
         if epochs < start_epoch:
-            LOGGER.info(f"{weights} has been trained for {ckpt['epoch']} epochs. Fine-tuning for {epochs} more epochs.")
+            logger.info(f"{weights} has been trained for {ckpt['epoch']} epochs. Fine-tuning for {epochs} more epochs.")
             epochs += ckpt['epoch']  # finetune additional epochs
 
         del ckpt, csd
 
     # DP mode
     if cuda and RANK == -1 and torch.cuda.device_count() > 1:
-        LOGGER.warning('WARNING: DP not recommended, use torch.distributed.run for best DDP Multi-GPU results.\n'
+        logger.warning('WARNING: DP not recommended, use torch.distributed.run for best DDP Multi-GPU results.\n'
                        'See Multi-GPU Tutorial at https://github.com/ultralytics/yolov5/issues/475 to get started.')
         model = torch.nn.DataParallel(model)
 
     # SyncBatchNorm
     if opt.sync_bn and cuda and RANK != -1:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
-        LOGGER.info('Using SyncBatchNorm()')
+        logger.info('Using SyncBatchNorm()')
 
     # Trainloader
     train_loader, dataset = create_dataloader(train_path,
@@ -312,7 +317,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     scheduler.last_epoch = start_epoch - 1  # do not move
 
     time_sec_tot = 0
-    eval_interval = 10
+    eval_interval = 1
+    log_interval = 50
 
     if opt.amp:
         scaler = amp.GradScaler(enabled=cuda)
@@ -322,7 +328,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
     callbacks.run('on_train_start')
-    LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
+    logger.info(f'Image sizes {imgsz} train, {imgsz} val\n'
                 f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
                 f"Logging results to {colorstr('bold', save_dir)}\n"
                 f'Starting training for {epochs} epochs...')
@@ -343,14 +349,14 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         mloss = torch.zeros(3, device=device)  # mean losses
         if RANK != -1:
             train_loader.sampler.set_epoch(epoch)
-        pbar = enumerate(train_loader)
-        LOGGER.info(('\n' + '%10s' * 7) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'labels', 'img_size'))
-        if RANK in (-1, 0):
-            pbar = tqdm(pbar, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
+        # pbar = enumerate(train_loader)
+        logger.info(('%10s' * 7) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'labels', 'img_size'))
+        # if RANK in (-1, 0):
+        #     pbar = tqdm(pbar, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
         optimizer.zero_grad()
 
         interval_start = time.time()
-        for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+        for i, (imgs, targets, paths, _) in enumerate(train_loader):  # batch -------------------------------------------------------------
             data_time = time.time() - interval_start
 
             callbacks.run('on_train_batch_start')
@@ -419,29 +425,31 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             interval_start = time.time()
 
             # Log
-            if RANK in (-1, 0):
+            callbacks.run('on_train_batch_end', ni, model, imgs, targets, paths, False)
+
+            if RANK in (-1, 0) and (i + 1) % log_interval == 0:
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
-                pbar.set_description(('%10s' * 2 + '%10.4g' * 5) %
-                                     (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
-                callbacks.run('on_train_batch_end', ni, model, imgs, targets, paths, False)
+                # pbar.set_description(('%10s' * 2 + '%10.4g' * 5) %
+                #                      (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
+                logger.info(('%10s' * 3 + '%10.4g' * 5) %
+                            (f'{i+1}/{len(train_loader)}', f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
 
-                if (i + 1) % 50 == 0:
-                    log_buffer.average(50)
-                    iter_time = log_buffer.output['iter_time']
-                    data_time = log_buffer.output['data_time']
+                log_buffer.average(log_interval)
+                iter_time = log_buffer.output['iter_time']
+                data_time = log_buffer.output['data_time']
 
-                    time_sec_tot += (iter_time * 50)
-                    time_sec_avg = time_sec_tot / (ni - 0 + 1)
-                    eta_sec = time_sec_avg * (nb * epochs - ni - 1)
-                    eta_str = str(datetime.timedelta(seconds=int(eta_sec)))
+                time_sec_tot += (iter_time * log_interval)
+                time_sec_avg = time_sec_tot / (ni - 0 + 1)
+                eta_sec = time_sec_avg * (nb * epochs - ni - 1)
+                eta_str = str(datetime.timedelta(seconds=int(eta_sec)))
 
-                    # eta = (nb * epochs - ni) * iter_time
-                    # eta_str = str(datetime.timedelta(seconds=int(eta)))
-                    LOGGER.info(f'eta: {eta_str}, data_time: {round(data_time, 5)}, time: {round(iter_time, 3)}')
+                # eta = (nb * epochs - ni) * iter_time
+                # eta_str = str(datetime.timedelta(seconds=int(eta)))
+                logger.info(f'eta: {eta_str}, data_time: {round(data_time, 5)}, time: {round(iter_time, 3)}')
 
-                if callbacks.stop_training:
-                    return
+            if callbacks.stop_training:
+                return
             # end batch ------------------------------------------------------------------------------------------------
 
         # Scheduler
@@ -455,48 +463,55 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             final_epoch = (epoch + 1 == epochs) or stopper.possible_stop
             if not noval or final_epoch:  # Calculate mAP
                 if (epoch + 1) % eval_interval == 0 or final_epoch:
-                    results, maps, _ = val.run(data_dict,
-                                               batch_size=batch_size // WORLD_SIZE * 2,
-                                               imgsz=imgsz,
-                                               model=ema.ema,
-                                               single_cls=single_cls,
-                                               dataloader=val_loader,
-                                               save_dir=save_dir,
-                                               plots=False,
-                                               callbacks=callbacks,
-                                               compute_loss=compute_loss)
+                    results, _, _ = val.run(
+                        data_dict,
+                        batch_size=batch_size // WORLD_SIZE,
+                        imgsz=imgsz,
+                        model=ema.ema,
+                        iou_thres=0.65,  # best pycocotools results at 0.65
+                        single_cls=single_cls,
+                        dataloader=val_loader,
+                        save_dir=save_dir,
+                        save_json=True,
+                        verbose=False,
+                        plots=False,
+                        half=False,
+                        callbacks=callbacks,
+                        compute_loss=compute_loss,
+                        logger=logger)  # val best model with plots
 
-            # Update best mAP
-            fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
-            if fi > best_fitness:
-                best_fitness = fi
-            log_vals = list(mloss) + list(results) + lr
-            callbacks.run('on_fit_epoch_end', log_vals, epoch, best_fitness, fi)
+                    # Update best mAP
+                    fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
+                    if fi > best_fitness:
+                        best_fitness = fi
+                    log_vals = list(mloss) + list(results) + lr
+                    callbacks.run('on_fit_epoch_end', log_vals, epoch, best_fitness, fi)
+                    logger.info(log_vals)
 
-            # Save model
-            if (not nosave) or (final_epoch and not evolve):  # if save
-                ckpt = {
-                    'epoch': epoch,
-                    'best_fitness': best_fitness,
-                    'model': deepcopy(de_parallel(model)).half(),
-                    'ema': deepcopy(ema.ema).half(),
-                    'updates': ema.updates,
-                    'optimizer': optimizer.state_dict(),
-                    'wandb_id': loggers.wandb.wandb_run.id if loggers.wandb else None,
-                    'date': datetime.datetime.now().isoformat()}
+                    # Save model
+                    if (not nosave) or (final_epoch and not evolve):  # if save
+                        ckpt = {
+                            'epoch': epoch,
+                            'best_fitness': best_fitness,
+                            'model': deepcopy(de_parallel(model)).half(),
+                            'ema': deepcopy(ema.ema).half(),
+                            'updates': ema.updates,
+                            'optimizer': optimizer.state_dict(),
+                            'wandb_id': loggers.wandb.wandb_run.id if loggers.wandb else None,
+                            'date': datetime.datetime.now().isoformat()}
 
-                # Save last, best and delete
-                torch.save(ckpt, last)
-                if best_fitness == fi:
-                    torch.save(ckpt, best)
-                if (epoch > 0) and (opt.save_period > 0) and (epoch % opt.save_period == 0):
-                    torch.save(ckpt, w / f'epoch{epoch}.pt')
-                del ckpt
-                callbacks.run('on_model_save', last, epoch, final_epoch, best_fitness, fi)
+                        # Save last, best and delete
+                        torch.save(ckpt, last)
+                        if best_fitness == fi:
+                            torch.save(ckpt, best)
+                        if (epoch > 0) and (opt.save_period > 0) and (epoch % opt.save_period == 0):
+                            torch.save(ckpt, w / f'epoch{epoch}.pt')
+                        del ckpt
+                        callbacks.run('on_model_save', last, epoch, final_epoch, best_fitness, fi)
 
-            # Stop Single-GPU
-            if RANK == -1 and stopper(epoch=epoch, fitness=fi):
-                break
+                    # Stop Single-GPU
+                    if RANK == -1 and stopper(epoch=epoch, fitness=fi):
+                        break
 
             # Stop DDP TODO: known issues shttps://github.com/ultralytics/yolov5/pull/4576
             # stop = stopper(epoch=epoch, fitness=fi)
@@ -511,31 +526,34 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         # end epoch ----------------------------------------------------------------------------------------------------
     # end training -----------------------------------------------------------------------------------------------------
     if RANK in (-1, 0):
-        LOGGER.info(f'\n{epoch - start_epoch + 1} epochs completed in {(time.time() - t0) / 3600:.3f} hours.')
+        logger.info(f'\n{epoch - start_epoch + 1} epochs completed in {(time.time() - t0) / 3600:.3f} hours.')
         for f in last, best:
             if f.exists():
                 strip_optimizer(f)  # strip optimizers
                 if f is best:
-                    LOGGER.info(f'\nValidating {f}...')
+                    logger.info(f'\nValidating {f}...')
                     results, _, _ = val.run(
                         data_dict,
-                        batch_size=batch_size // WORLD_SIZE * 2,
+                        batch_size=batch_size // WORLD_SIZE,
                         imgsz=imgsz,
-                        model=attempt_load(f, device).half(),
+                        model=attempt_load(f, device).half(),  # half
                         iou_thres=0.65 if is_coco else 0.60,  # best pycocotools results at 0.65
                         single_cls=single_cls,
                         dataloader=val_loader,
                         save_dir=save_dir,
                         save_json=is_coco,
                         verbose=True,
+                        half=False,
                         plots=False,
                         callbacks=callbacks,
-                        compute_loss=compute_loss)  # val best model with plots
+                        compute_loss=compute_loss,
+                        logger=logger)  # val best model with plots
                     if is_coco:
                         callbacks.run('on_fit_epoch_end', list(mloss) + list(results) + lr, epoch, best_fitness, fi)
 
         callbacks.run('on_train_end', last, best, plots, epoch, results)
-        LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}")
+        logger.info(results)
+        logger.info(f"Results saved to {colorstr('bold', save_dir)}")
 
     torch.cuda.empty_cache()
     return results
