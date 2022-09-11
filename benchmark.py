@@ -62,7 +62,7 @@ def measure_inference_speed(opt):
                                     stride=32,
                                     single_cls=False,
                                     pad=0.5,
-                                    rect=True,
+                                    rect=False,
                                     workers=0)[0]
 
     # the first several iterations may be very slow so skip them
