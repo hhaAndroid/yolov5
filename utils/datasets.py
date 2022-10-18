@@ -17,7 +17,7 @@ from pathlib import Path
 from threading import Thread
 from urllib.parse import urlparse
 from zipfile import ZipFile
-import mmcv
+import mmengine
 
 import numpy as np
 import torch
@@ -438,7 +438,7 @@ class LoadImagesAndLabels(Dataset):
                 }))
         else:
             file_client_args = dict(backend='disk')
-        self.file_client = mmcv.FileClient(**file_client_args)
+        self.file_client = mmengine.FileClient(**file_client_args)
 
         try:
             f = []  # image files
