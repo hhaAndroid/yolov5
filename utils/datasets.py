@@ -18,6 +18,7 @@ from threading import Thread
 from urllib.parse import urlparse
 from zipfile import ZipFile
 import mmengine
+import mmcv
 
 import numpy as np
 import torch
