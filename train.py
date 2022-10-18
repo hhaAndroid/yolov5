@@ -29,7 +29,6 @@ import yaml
 from torch.cuda import amp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD, Adam, AdamW, lr_scheduler
-from tqdm.auto import tqdm
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -55,26 +54,69 @@ from utils.loss import ComputeLoss
 from utils.metrics import fitness
 from utils.plots import plot_evolve, plot_labels
 from utils.torch_utils import EarlyStopping, ModelEMA, de_parallel, select_device, torch_distributed_zero_first
-from mmcv.runner import LogBuffer
-from mmcv import get_logger
 
-# srun
-import os
-import subprocess
+from mmengine.logging import MMLogger
 
-proc_id = int(os.environ['SLURM_PROCID'])
-ntasks = int(os.environ['SLURM_NTASKS'])
-node_list = os.environ['SLURM_NODELIST']
+from collections import OrderedDict
 
-addr = subprocess.getoutput(
-    f'scontrol show hostname {node_list} | head -n1')
-os.environ['MASTER_PORT'] = '29500'
-if 'MASTER_ADDR' not in os.environ:
-    os.environ['MASTER_ADDR'] = addr
 
-os.environ['WORLD_SIZE'] = str(ntasks)
-os.environ['LOCAL_RANK'] = str(proc_id)
-os.environ['RANK'] = str(proc_id)
+class LogBuffer:
+
+    def __init__(self):
+        self.val_history = OrderedDict()
+        self.n_history = OrderedDict()
+        self.output = OrderedDict()
+        self.ready = False
+
+    def clear(self) -> None:
+        self.val_history.clear()
+        self.n_history.clear()
+        self.clear_output()
+
+    def clear_output(self) -> None:
+        self.output.clear()
+        self.ready = False
+
+    def update(self, vars: dict, count: int = 1) -> None:
+        assert isinstance(vars, dict)
+        for key, var in vars.items():
+            if key not in self.val_history:
+                self.val_history[key] = []
+                self.n_history[key] = []
+            self.val_history[key].append(var)
+            self.n_history[key].append(count)
+
+    def average(self, n: int = 0) -> None:
+        """Average latest n values or all values."""
+        assert n >= 0
+        for key in self.val_history:
+            values = np.array(self.val_history[key][-n:])
+            nums = np.array(self.n_history[key][-n:])
+            avg = np.sum(values * nums) / np.sum(nums)
+            self.output[key] = avg
+        self.ready = True
+
+
+use_srum = True
+
+if use_srum:
+    # srun
+    import os
+    import subprocess
+
+    proc_id = int(os.environ['SLURM_PROCID'])
+    ntasks = int(os.environ['SLURM_NTASKS'])
+    node_list = os.environ['SLURM_NODELIST']
+
+    addr = subprocess.getoutput(
+        f'scontrol show hostname {node_list} | head -n1')
+    os.environ['MASTER_PORT'] = '29500'
+    if 'MASTER_ADDR' not in os.environ:
+        os.environ['MASTER_ADDR'] = addr
+
+    os.environ['WORLD_SIZE'] = str(ntasks)
+    os.environ['LOCAL_RANK'] = str(proc_id)
+    os.environ['RANK'] = str(proc_id)
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
@@ -91,7 +133,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
     os.makedirs(save_dir, exist_ok=True)
     log_file = os.path.join(save_dir, f'{timestamp}.log')
-    logger = get_logger(name='yolov5', log_file=log_file)
+    logger = MMLogger.get_instance(name='yolov5', log_file=log_file)
 
     # Directories
     w = save_dir / 'weights'  # weights dir
@@ -332,6 +374,9 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
                 f"Logging results to {colorstr('bold', save_dir)}\n"
                 f'Starting training for {epochs} epochs...')
+
+    logger.info(f'hyp= {hyp}')
+
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         callbacks.run('on_train_epoch_start')
         model.train()
@@ -356,7 +401,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         optimizer.zero_grad()
 
         interval_start = time.time()
-        for i, (imgs, targets, paths, _) in enumerate(train_loader):  # batch -------------------------------------------------------------
+        for i, (imgs, targets, paths, _) in enumerate(
+                train_loader):  # batch -------------------------------------------------------------
             data_time = time.time() - interval_start
 
             callbacks.run('on_train_batch_start')
@@ -433,7 +479,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 # pbar.set_description(('%10s' * 2 + '%10.4g' * 5) %
                 #                      (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
                 logger.info(('%10s' * 3 + '%10.4g' * 5) %
-                            (f'{i+1}/{len(train_loader)}', f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
+                            (f'{i + 1}/{len(train_loader)}', f'{epoch + 1}/{epochs}', mem, *mloss, targets.shape[0],
+                             imgs.shape[-1]))
 
                 log_buffer.average(log_interval)
                 iter_time = log_buffer.output['iter_time']
