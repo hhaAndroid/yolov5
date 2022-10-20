@@ -34,6 +34,9 @@ from utils.general import (DATASETS_DIR, LOGGER, NUM_THREADS, check_dataset, che
                            xyxy2xywhn)
 from utils.torch_utils import torch_distributed_zero_first
 
+import mmengine
+import mmcv
+
 # Parameters
 HELP_URL = 'See https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
 IMG_FORMATS = 'bmp', 'dng', 'jpeg', 'jpg', 'mpo', 'png', 'tif', 'tiff', 'webp', 'pfm'  # include image suffixes
@@ -137,6 +140,12 @@ def create_dataloader(path,
     batch_size = min(batch_size, len(dataset))
     nd = torch.cuda.device_count()  # number of CUDA devices
     nw = min([os.cpu_count() // max(nd, 1), batch_size if batch_size > 1 else 0, workers])  # number of workers
+
+    if nw != workers:
+        print(f'======{path} num_workers changed from {workers} to {nw}', flush=True)
+    else:
+        print(f'======{path} num_workers {workers}', flush=True)
+
     sampler = None if rank == -1 else distributed.DistributedSampler(dataset, shuffle=shuffle)
     loader = DataLoader if image_weights else InfiniteDataLoader  # only DataLoader allows for attribute updates
     generator = torch.Generator()
@@ -456,6 +465,17 @@ class LoadImagesAndLabels(Dataset):
         self.path = path
         self.albumentations = Albumentations(size=img_size) if augment else None
 
+        use_ceph = True
+        if use_ceph:
+            file_client_args = dict(
+                backend='petrel',
+                path_mapping=dict({
+                    '/home/PJLAB/huanghaian/dataset/coco/yolov5_coco/images/': 's3://openmmlab/datasets/detection/coco/'
+                }))
+        else:
+            file_client_args = dict(backend='disk')
+        self.file_client = mmengine.FileClient(**file_client_args)
+
         try:
             f = []  # image files
             for p in path if isinstance(path, list) else [path]:
@@ -480,12 +500,13 @@ class LoadImagesAndLabels(Dataset):
         # Check cache
         self.label_files = img2label_paths(self.im_files)  # labels
         cache_path = (p if p.is_file() else Path(self.label_files[0]).parent).with_suffix('.cache')
-        try:
-            cache, exists = np.load(cache_path, allow_pickle=True).item(), True  # load dict
-            assert cache['version'] == self.cache_version  # matches current version
-            assert cache['hash'] == get_hash(self.label_files + self.im_files)  # identical hash
-        except Exception:
-            cache, exists = self.cache_labels(cache_path, prefix), False  # run cache ops
+        cache, exists = np.load(cache_path, allow_pickle=True).item(), True  # load dict
+        # try:
+        #     cache, exists = np.load(cache_path, allow_pickle=True).item(), True  # load dict
+        #     assert cache['version'] == self.cache_version  # matches current version
+        #     assert cache['hash'] == get_hash(self.label_files + self.im_files)  # identical hash
+        # except Exception:
+        #     cache, exists = self.cache_labels(cache_path, prefix), False  # run cache ops
 
         # Display cache
         nf, nm, ne, nc, n = cache.pop('results')  # found, missing, empty, corrupt, total
@@ -697,7 +718,11 @@ class LoadImagesAndLabels(Dataset):
             if fn.exists():  # load npy
                 im = np.load(fn)
             else:  # read image
-                im = cv2.imread(f)  # BGR
+                if self.file_client:
+                    img_bytes = self.file_client.get(f)
+                    im = mmcv.imfrombytes(img_bytes)
+                else:
+                    im = cv2.imread(f)  # BGR
                 assert im is not None, f'Image Not Found {f}'
             h0, w0 = im.shape[:2]  # orig hw
             r = self.img_size / max(h0, w0)  # ratio

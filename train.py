@@ -22,7 +22,7 @@ import random
 import sys
 import time
 from copy import deepcopy
-from datetime import datetime
+import datetime
 from pathlib import Path
 
 import numpy as np
@@ -31,7 +31,6 @@ import torch.distributed as dist
 import torch.nn as nn
 import yaml
 from torch.optim import lr_scheduler
-from tqdm import tqdm
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -47,17 +46,78 @@ from utils.autobatch import check_train_batch_size
 from utils.callbacks import Callbacks
 from utils.dataloaders import create_dataloader
 from utils.downloads import attempt_download, is_url
-from utils.general import (LOGGER, check_amp, check_dataset, check_file, check_git_status, check_img_size,
+from utils.general import (check_dataset, check_file, check_git_status, check_img_size,
                            check_requirements, check_suffix, check_yaml, colorstr, get_latest_run, increment_path,
                            init_seeds, intersect_dicts, labels_to_class_weights, labels_to_image_weights, methods,
                            one_cycle, print_args, print_mutation, strip_optimizer, yaml_save)
-from utils.loggers import Loggers
 from utils.loggers.comet.comet_utils import check_comet_resume
 from utils.loss import ComputeLoss
 from utils.metrics import fitness
 from utils.plots import plot_evolve
 from utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel, select_device, smart_DDP, smart_optimizer,
                                smart_resume, torch_distributed_zero_first)
+
+from mmengine.logging import MMLogger
+from collections import OrderedDict
+
+
+class LogBuffer:
+
+    def __init__(self):
+        self.val_history = OrderedDict()
+        self.n_history = OrderedDict()
+        self.output = OrderedDict()
+        self.ready = False
+
+    def clear(self) -> None:
+        self.val_history.clear()
+        self.n_history.clear()
+        self.clear_output()
+
+    def clear_output(self) -> None:
+        self.output.clear()
+        self.ready = False
+
+    def update(self, vars: dict, count: int = 1) -> None:
+        assert isinstance(vars, dict)
+        for key, var in vars.items():
+            if key not in self.val_history:
+                self.val_history[key] = []
+                self.n_history[key] = []
+            self.val_history[key].append(var)
+            self.n_history[key].append(count)
+
+    def average(self, n: int = 0) -> None:
+        """Average latest n values or all values."""
+        assert n >= 0
+        for key in self.val_history:
+            values = np.array(self.val_history[key][-n:])
+            nums = np.array(self.n_history[key][-n:])
+            avg = np.sum(values * nums) / np.sum(nums)
+            self.output[key] = avg
+        self.ready = True
+
+
+use_srum = True
+
+if use_srum:
+    # srun
+    import os
+    import subprocess
+
+    proc_id = int(os.environ['SLURM_PROCID'])
+    ntasks = int(os.environ['SLURM_NTASKS'])
+    node_list = os.environ['SLURM_NODELIST']
+
+    addr = subprocess.getoutput(
+        f'scontrol show hostname {node_list} | head -n1')
+    os.environ['MASTER_PORT'] = '29500'
+    if 'MASTER_ADDR' not in os.environ:
+        os.environ['MASTER_ADDR'] = addr
+
+    os.environ['WORLD_SIZE'] = str(ntasks)
+    os.environ['LOCAL_RANK'] = str(proc_id)
+    os.environ['RANK'] = str(proc_id)
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
@@ -70,6 +130,12 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze
     callbacks.run('on_pretrain_routine_start')
 
+    log_buffer = LogBuffer()
+    timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+    os.makedirs(save_dir, exist_ok=True)
+    log_file = os.path.join(save_dir, f'{timestamp}.log')
+    logger = MMLogger.get_instance(name='yolov5', log_file=log_file)
+
     # Directories
     w = save_dir / 'weights'  # weights dir
     (w.parent if evolve else w).mkdir(parents=True, exist_ok=True)  # make dir
@@ -79,7 +145,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     if isinstance(hyp, str):
         with open(hyp, errors='ignore') as f:
             hyp = yaml.safe_load(f)  # load hyps dict
-    LOGGER.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
+    logger.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
     opt.hyp = hyp.copy()  # for saving hyps to checkpoints
 
     # Save run settings
@@ -90,19 +156,9 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     # Loggers
     data_dict = None
     if RANK in {-1, 0}:
-        loggers = Loggers(save_dir, weights, opt, hyp, LOGGER)  # loggers instance
-
-        # Register actions
-        for k in methods(loggers):
-            callbacks.register_action(k, callback=getattr(loggers, k))
-
-        # Process custom dataset artifact link
-        data_dict = loggers.remote_dataset
-        if resume:  # If resuming runs from remote artifact
-            weights, epochs, hyp, batch_size = opt.weights, opt.epochs, opt.hyp, opt.batch_size
+        pass
 
     # Config
-    plots = not evolve and not opt.noplots  # create plots
     cuda = device.type != 'cpu'
     init_seeds(opt.seed + 1 + RANK, deterministic=True)
     with torch_distributed_zero_first(LOCAL_RANK):
@@ -110,7 +166,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     train_path, val_path = data_dict['train'], data_dict['val']
     nc = 1 if single_cls else int(data_dict['nc'])  # number of classes
     names = {0: 'item'} if single_cls and len(data_dict['names']) != 1 else data_dict['names']  # class names
-    is_coco = isinstance(val_path, str) and val_path.endswith('coco/val2017.txt')  # COCO dataset
+    is_coco = True
 
     # Model
     check_suffix(weights, '.pt')  # check weights
@@ -124,10 +180,10 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
         csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(csd, strict=False)  # load
-        LOGGER.info(f'Transferred {len(csd)}/{len(model.state_dict())} items from {weights}')  # report
+        logger.info(f'Transferred {len(csd)}/{len(model.state_dict())} items from {weights}')  # report
     else:
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
-    amp = check_amp(model)  # check AMP
+    amp = True
 
     # Freeze
     freeze = [f'model.{x}.' for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # layers to freeze
@@ -135,7 +191,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         v.requires_grad = True  # train all layers
         # v.register_hook(lambda x: torch.nan_to_num(x))  # NaN to 0 (commented for erratic training results)
         if any(x in k for x in freeze):
-            LOGGER.info(f'freezing {k}')
+            logger.info(f'freezing {k}')
             v.requires_grad = False
 
     # Image size
@@ -143,15 +199,16 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     imgsz = check_img_size(opt.imgsz, gs, floor=gs * 2)  # verify imgsz is gs-multiple
 
     # Batch size
-    if RANK == -1 and batch_size == -1:  # single-GPU only, estimate best batch size
-        batch_size = check_train_batch_size(model, imgsz, amp)
-        loggers.on_params_update({"batch_size": batch_size})
+    # if RANK == -1 and batch_size == -1:  # single-GPU only, estimate best batch size
+    #     batch_size = check_train_batch_size(model, imgsz, amp)
+    #     logger.on_params_update({"batch_size": batch_size})
 
     # Optimizer
     nbs = 64  # nominal batch size
     accumulate = max(round(nbs / batch_size), 1)  # accumulate loss before optimizing
     hyp['weight_decay'] *= batch_size * accumulate / nbs  # scale weight_decay
-    optimizer = smart_optimizer(model, opt.optimizer, hyp['lr0'], hyp['momentum'], hyp['weight_decay'])
+    logger.info(f"=========== Scaled weight_decay = {hyp['weight_decay']}=========")
+    optimizer = smart_optimizer(model, opt.optimizer, hyp['lr0'], hyp['momentum'], hyp['weight_decay'], logger=logger)
 
     # Scheduler
     if opt.cos_lr:
@@ -172,14 +229,14 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
     # DP mode
     if cuda and RANK == -1 and torch.cuda.device_count() > 1:
-        LOGGER.warning('WARNING ⚠️ DP not recommended, use torch.distributed.run for best DDP Multi-GPU results.\n'
+        logger.warning('WARNING ⚠️ DP not recommended, use torch.distributed.run for best DDP Multi-GPU results.\n'
                        'See Multi-GPU Tutorial at https://github.com/ultralytics/yolov5/issues/475 to get started.')
         model = torch.nn.DataParallel(model)
 
     # SyncBatchNorm
     if opt.sync_bn and cuda and RANK != -1:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
-        LOGGER.info('Using SyncBatchNorm()')
+        logger.info('Using SyncBatchNorm()')
 
     # Trainloader
     train_loader, dataset = create_dataloader(train_path,
@@ -238,6 +295,10 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights
     model.names = names
 
+    time_sec_tot = 0
+    eval_interval = 10
+    log_interval = 50
+
     # Start training
     t0 = time.time()
     nb = len(train_loader)  # number of batches
@@ -251,10 +312,11 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     stopper, stop = EarlyStopping(patience=opt.patience), False
     compute_loss = ComputeLoss(model)  # init loss class
     callbacks.run('on_train_start')
-    LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
+    logger.info(f'Image sizes {imgsz} train, {imgsz} val\n'
                 f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
                 f"Logging results to {colorstr('bold', save_dir)}\n"
                 f'Starting training for {epochs} epochs...')
+    logger.info(f'hyp= {hyp}')
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         callbacks.run('on_train_epoch_start')
         model.train()
@@ -272,12 +334,15 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         mloss = torch.zeros(3, device=device)  # mean losses
         if RANK != -1:
             train_loader.sampler.set_epoch(epoch)
-        pbar = enumerate(train_loader)
-        LOGGER.info(('\n' + '%11s' * 7) % ('Epoch', 'GPU_mem', 'box_loss', 'obj_loss', 'cls_loss', 'Instances', 'Size'))
-        if RANK in {-1, 0}:
-            pbar = tqdm(pbar, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
+        # pbar = enumerate(train_loader)
+        logger.info(('\n' + '%11s' * 7) % ('Epoch', 'GPU_mem', 'box_loss', 'obj_loss', 'cls_loss', 'Instances', 'Size'))
+        # if RANK in {-1, 0}:
+        #     pbar = tqdm(pbar, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
         optimizer.zero_grad()
-        for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+        interval_start = time.time()
+        for i, (imgs, targets, paths, _) in enumerate(
+                train_loader):  # batch -------------------------------------------------------------
+            data_time = time.time() - interval_start
             callbacks.run('on_train_batch_start')
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
@@ -324,15 +389,35 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                     ema.update(model)
                 last_opt_step = ni
 
+            itertime = time.time() - interval_start
+            log_buffer.update(dict(data_time=data_time, iter_time=itertime))
+            interval_start = time.time()
+
             # Log
-            if RANK in {-1, 0}:
+            if RANK in (-1, 0) and (i + 1) % log_interval == 0:
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
-                pbar.set_description(('%11s' * 2 + '%11.4g' * 5) %
-                                     (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
-                callbacks.run('on_train_batch_end', model, ni, imgs, targets, paths, list(mloss))
-                if callbacks.stop_training:
-                    return
+                # pbar.set_description(('%10s' * 2 + '%10.4g' * 5) %
+                #                      (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
+                logger.info(('%10s' * 3 + '%10.4g' * 5) %
+                            (f'{i + 1}/{len(train_loader)}', f'{epoch + 1}/{epochs}', mem, *mloss, targets.shape[0],
+                             imgs.shape[-1]))
+
+                log_buffer.average(log_interval)
+                iter_time = log_buffer.output['iter_time']
+                data_time = log_buffer.output['data_time']
+
+                time_sec_tot += (iter_time * log_interval)
+                time_sec_avg = time_sec_tot / (ni - 0 + 1)
+                eta_sec = time_sec_avg * (nb * epochs - ni - 1)
+                eta_str = str(datetime.timedelta(seconds=int(eta_sec)))
+
+                # eta = (nb * epochs - ni) * iter_time
+                # eta_str = str(datetime.timedelta(seconds=int(eta)))
+                logger.info(f'eta: {eta_str}, data_time: {round(data_time, 5)}, time: {round(iter_time, 3)}')
+
+            if callbacks.stop_training:
+                return
             # end batch ------------------------------------------------------------------------------------------------
 
         # Scheduler
@@ -345,65 +430,68 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
             final_epoch = (epoch + 1 == epochs) or stopper.possible_stop
             if not noval or final_epoch:  # Calculate mAP
-                results, maps, _ = validate.run(data_dict,
-                                                batch_size=batch_size // WORLD_SIZE * 2,
-                                                imgsz=imgsz,
-                                                half=amp,
-                                                model=ema.ema,
-                                                single_cls=single_cls,
-                                                dataloader=val_loader,
-                                                save_dir=save_dir,
-                                                plots=False,
-                                                callbacks=callbacks,
-                                                compute_loss=compute_loss)
+                if (epoch + 1) % eval_interval == 0 or final_epoch:
+                    results, _, _ = validate.run(data_dict,
+                                                 batch_size=batch_size // WORLD_SIZE * 2,
+                                                 imgsz=imgsz,
+                                                 half=amp,
+                                                 model=ema.ema,
+                                                 single_cls=single_cls,
+                                                 dataloader=val_loader,
+                                                 save_dir=save_dir,
+                                                 plots=False,
+                                                 callbacks=callbacks,
+                                                 compute_loss=compute_loss,
+                                                 logger=logger)
 
-            # Update best mAP
-            fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
-            stop = stopper(epoch=epoch, fitness=fi)  # early stop check
-            if fi > best_fitness:
-                best_fitness = fi
-            log_vals = list(mloss) + list(results) + lr
-            callbacks.run('on_fit_epoch_end', log_vals, epoch, best_fitness, fi)
+                    # Update best mAP
+                    fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
+                    stop = stopper(epoch=epoch, fitness=fi)  # early stop check
+                    if fi > best_fitness:
+                        best_fitness = fi
+                    log_vals = list(mloss) + list(results) + lr
+                    callbacks.run('on_fit_epoch_end', log_vals, epoch, best_fitness, fi)
+                    logger.info(log_vals)
 
-            # Save model
-            if (not nosave) or (final_epoch and not evolve):  # if save
-                ckpt = {
-                    'epoch': epoch,
-                    'best_fitness': best_fitness,
-                    'model': deepcopy(de_parallel(model)).half(),
-                    'ema': deepcopy(ema.ema).half(),
-                    'updates': ema.updates,
-                    'optimizer': optimizer.state_dict(),
-                    'opt': vars(opt),
-                    'date': datetime.now().isoformat()}
+                    # Save model
+                    if (not nosave) or (final_epoch and not evolve):  # if save
+                        ckpt = {
+                            'epoch': epoch,
+                            'best_fitness': best_fitness,
+                            'model': deepcopy(de_parallel(model)).half(),
+                            'ema': deepcopy(ema.ema).half(),
+                            'updates': ema.updates,
+                            'optimizer': optimizer.state_dict(),
+                            'opt': vars(opt),
+                            'date': datetime.now().isoformat()}
 
-                # Save last, best and delete
-                torch.save(ckpt, last)
-                if best_fitness == fi:
-                    torch.save(ckpt, best)
-                if opt.save_period > 0 and epoch % opt.save_period == 0:
-                    torch.save(ckpt, w / f'epoch{epoch}.pt')
-                del ckpt
-                callbacks.run('on_model_save', last, epoch, final_epoch, best_fitness, fi)
+                        # Save last, best and delete
+                        torch.save(ckpt, last)
+                        if best_fitness == fi:
+                            torch.save(ckpt, best)
+                        if opt.save_period > 0 and epoch % opt.save_period == 0:
+                            torch.save(ckpt, w / f'epoch{epoch}.pt')
+                        del ckpt
+                        callbacks.run('on_model_save', last, epoch, final_epoch, best_fitness, fi)
 
         # EarlyStopping
-        if RANK != -1:  # if DDP training
-            broadcast_list = [stop if RANK == 0 else None]
-            dist.broadcast_object_list(broadcast_list, 0)  # broadcast 'stop' to all ranks
-            if RANK != 0:
-                stop = broadcast_list[0]
-        if stop:
-            break  # must break all DDP ranks
+        # if RANK != -1:  # if DDP training
+        #     broadcast_list = [stop if RANK == 0 else None]
+        #     dist.broadcast_object_list(broadcast_list, 0)  # broadcast 'stop' to all ranks
+        #     if RANK != 0:
+        #         stop = broadcast_list[0]
+        # if stop:
+        #     break  # must break all DDP ranks
 
         # end epoch ----------------------------------------------------------------------------------------------------
     # end training -----------------------------------------------------------------------------------------------------
     if RANK in {-1, 0}:
-        LOGGER.info(f'\n{epoch - start_epoch + 1} epochs completed in {(time.time() - t0) / 3600:.3f} hours.')
+        logger.info(f'\n{epoch - start_epoch + 1} epochs completed in {(time.time() - t0) / 3600:.3f} hours.')
         for f in last, best:
             if f.exists():
                 strip_optimizer(f)  # strip optimizers
                 if f is best:
-                    LOGGER.info(f'\nValidating {f}...')
+                    logger.info(f'\nValidating {f}...')
                     results, _, _ = validate.run(
                         data_dict,
                         batch_size=batch_size // WORLD_SIZE * 2,
@@ -415,13 +503,16 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                         save_dir=save_dir,
                         save_json=is_coco,
                         verbose=True,
-                        plots=plots,
+                        plots=False,
                         callbacks=callbacks,
-                        compute_loss=compute_loss)  # val best model with plots
+                        compute_loss=compute_loss,
+                        logger=logger)  # val best model with plots
                     if is_coco:
                         callbacks.run('on_fit_epoch_end', list(mloss) + list(results) + lr, epoch, best_fitness, fi)
 
         callbacks.run('on_train_end', last, best, epoch, results)
+        logger.info(results)
+        logger.info(f"Results saved to {colorstr('bold', save_dir)}")
 
     torch.cuda.empty_cache()
     return results
@@ -611,9 +702,9 @@ def main(opt, callbacks=Callbacks()):
 
         # Plot results
         plot_evolve(evolve_csv)
-        LOGGER.info(f'Hyperparameter evolution finished {opt.evolve} generations\n'
-                    f"Results saved to {colorstr('bold', save_dir)}\n"
-                    f'Usage example: $ python train.py --hyp {evolve_yaml}')
+        # logger.info(f'Hyperparameter evolution finished {opt.evolve} generations\n'
+        #             f"Results saved to {colorstr('bold', save_dir)}\n"
+        #             f'Usage example: $ python train.py --hyp {evolve_yaml}')
 
 
 def run(**kwargs):

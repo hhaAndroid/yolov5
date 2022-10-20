@@ -26,7 +26,7 @@ class Albumentations:
         prefix = colorstr('albumentations: ')
         try:
             import albumentations as A
-            check_version(A.__version__, '1.0.3', hard=True)  # version requirement
+            # check_version(A.__version__, '1.0.3', hard=True)  # version requirement
 
             T = [
                 A.RandomResizedCrop(height=size, width=size, scale=(0.8, 1.0), ratio=(0.9, 1.11), p=0.0),

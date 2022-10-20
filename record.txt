@@ -1,0 +1,6 @@
+train.py --data coco.yaml --batch 4 --weights '' --cfg yolov5s.yaml --epochs 300 --img 640 --hyp hyp.scratch-low.yaml
+
+python -m torch.distributed.launch --nproc_per_node 8 train.py --batch 128 --data coco.yaml --weights '' --cfg yolov5s.yaml --hyp hyp.scratch-low.yaml
+
+srun -p mm_det --job-name=yolo --gres=gpu:8 --ntasks=8 --ntasks-per-node=8 --cpus-per-task=4 --kill-on-bad-exit=1 python train.py --batch 128 --data coco.yaml --weights '' --cfg yolov5s.yaml --hyp hyp.scratch-low.yaml --project /mnt/lustre/share_data/huanghaian/yolov5_workdir
+
