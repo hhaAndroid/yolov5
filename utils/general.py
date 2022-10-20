@@ -27,7 +27,7 @@ from typing import Optional
 from zipfile import ZipFile
 
 import cv2
-import IPython
+# import IPython
 import numpy as np
 import pandas as pd
 import pkg_resources as pkg
@@ -457,8 +457,8 @@ def check_font(font=FONT, progress=False):
     file = CONFIG_DIR / font.name
     if not font.exists() and not file.exists():
         url = f'https://ultralytics.com/assets/{font.name}'
-        LOGGER.info(f'Downloading {url} to {file}...')
-        torch.hub.download_url_to_file(url, str(file), progress=progress)
+        # LOGGER.info(f'Downloading {url} to {file}...')
+        # torch.hub.download_url_to_file(url, str(file), progress=progress)
 
 
 def check_dataset(data, autodownload=True):

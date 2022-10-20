@@ -52,7 +52,6 @@ from utils.general import (check_dataset, check_file, check_git_status, check_im
 from utils.loggers.comet.comet_utils import check_comet_resume
 from utils.loss import ComputeLoss
 from utils.metrics import fitness
-# from utils.plots import plot_evolve
 from utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel, select_device, smart_DDP, smart_optimizer,
                                smart_resume, torch_distributed_zero_first)
 
@@ -98,6 +97,7 @@ class LogBuffer:
 
 
 use_srum = True
+MASTER_PORT = '29500'
 
 if use_srum:
     # srun
@@ -110,7 +110,7 @@ if use_srum:
 
     addr = subprocess.getoutput(
         f'scontrol show hostname {node_list} | head -n1')
-    os.environ['MASTER_PORT'] = '29500'
+    os.environ['MASTER_PORT'] = MASTER_PORT
     if 'MASTER_ADDR' not in os.environ:
         os.environ['MASTER_ADDR'] = addr
 
@@ -121,6 +121,7 @@ if use_srum:
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
+print(f'======================LOCAL_RANK: {LOCAL_RANK}, RANK: {RANK}, WORLD_SIZE: {WORLD_SIZE}==================')
 
 
 def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictionary
@@ -227,10 +228,10 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         del ckpt, csd
 
     # DP mode
-    if cuda and RANK == -1 and torch.cuda.device_count() > 1:
-        logger.warning('WARNING ⚠️ DP not recommended, use torch.distributed.run for best DDP Multi-GPU results.\n'
-                       'See Multi-GPU Tutorial at https://github.com/ultralytics/yolov5/issues/475 to get started.')
-        model = torch.nn.DataParallel(model)
+    # if cuda and RANK == -1 and torch.cuda.device_count() > 1:
+    #     logger.warning('WARNING ⚠️ DP not recommended, use torch.distributed.run for best DDP Multi-GPU results.\n'
+    #                    'See Multi-GPU Tutorial at https://github.com/ultralytics/yolov5/issues/475 to get started.')
+    #     model = torch.nn.DataParallel(model)
 
     # SyncBatchNorm
     if opt.sync_bn and cuda and RANK != -1:
