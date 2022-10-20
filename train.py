@@ -42,7 +42,6 @@ import val as validate  # for end-of-epoch mAP
 from models.experimental import attempt_load
 from models.yolo import Model
 from utils.autoanchor import check_anchors
-from utils.autobatch import check_train_batch_size
 from utils.callbacks import Callbacks
 from utils.dataloaders import create_dataloader
 from utils.downloads import attempt_download, is_url
@@ -53,7 +52,7 @@ from utils.general import (check_dataset, check_file, check_git_status, check_im
 from utils.loggers.comet.comet_utils import check_comet_resume
 from utils.loss import ComputeLoss
 from utils.metrics import fitness
-from utils.plots import plot_evolve
+# from utils.plots import plot_evolve
 from utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel, select_device, smart_DDP, smart_optimizer,
                                smart_resume, torch_distributed_zero_first)
 
@@ -701,7 +700,7 @@ def main(opt, callbacks=Callbacks()):
             print_mutation(keys, results, hyp.copy(), save_dir, opt.bucket)
 
         # Plot results
-        plot_evolve(evolve_csv)
+        # plot_evolve(evolve_csv)
         # logger.info(f'Hyperparameter evolution finished {opt.evolve} generations\n'
         #             f"Results saved to {colorstr('bold', save_dir)}\n"
         #             f'Usage example: $ python train.py --hyp {evolve_yaml}')
