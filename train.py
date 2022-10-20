@@ -38,6 +38,35 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
+
+use_srum = True
+MASTER_PORT = '29500'
+
+if use_srum:
+    # srun
+    import os
+    import subprocess
+
+    proc_id = int(os.environ['SLURM_PROCID'])
+    ntasks = int(os.environ['SLURM_NTASKS'])
+    node_list = os.environ['SLURM_NODELIST']
+
+    addr = subprocess.getoutput(
+        f'scontrol show hostname {node_list} | head -n1')
+    os.environ['MASTER_PORT'] = MASTER_PORT
+    if 'MASTER_ADDR' not in os.environ:
+        os.environ['MASTER_ADDR'] = addr
+
+    os.environ['WORLD_SIZE'] = str(ntasks)
+    os.environ['LOCAL_RANK'] = str(proc_id)
+    os.environ['RANK'] = str(proc_id)
+
+LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
+RANK = int(os.getenv('RANK', -1))
+WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
+print(f'======================LOCAL_RANK: {LOCAL_RANK}, RANK: {RANK}, WORLD_SIZE: {WORLD_SIZE}==================')
+
+
 import val as validate  # for end-of-epoch mAP
 from models.experimental import attempt_load
 from models.yolo import Model
@@ -96,34 +125,6 @@ class LogBuffer:
         self.ready = True
 
 
-use_srum = True
-MASTER_PORT = '29500'
-
-if use_srum:
-    # srun
-    import os
-    import subprocess
-
-    proc_id = int(os.environ['SLURM_PROCID'])
-    ntasks = int(os.environ['SLURM_NTASKS'])
-    node_list = os.environ['SLURM_NODELIST']
-
-    addr = subprocess.getoutput(
-        f'scontrol show hostname {node_list} | head -n1')
-    os.environ['MASTER_PORT'] = MASTER_PORT
-    if 'MASTER_ADDR' not in os.environ:
-        os.environ['MASTER_ADDR'] = addr
-
-    os.environ['WORLD_SIZE'] = str(ntasks)
-    os.environ['LOCAL_RANK'] = str(proc_id)
-    os.environ['RANK'] = str(proc_id)
-
-LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
-RANK = int(os.getenv('RANK', -1))
-WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
-print(f'======================LOCAL_RANK: {LOCAL_RANK}, RANK: {RANK}, WORLD_SIZE: {WORLD_SIZE}==================')
-
-
 def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictionary
     save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze = \
         Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.evolve, opt.data, opt.cfg, \
@@ -159,6 +160,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         pass
 
     # Config
+    print(f'=====device: {device}=======')
     cuda = device.type != 'cpu'
     init_seeds(opt.seed + 1 + RANK, deterministic=True)
     with torch_distributed_zero_first(LOCAL_RANK):
@@ -608,6 +610,7 @@ def main(opt, callbacks=Callbacks()):
         assert torch.cuda.device_count() > LOCAL_RANK, 'insufficient CUDA devices for DDP command'
         torch.cuda.set_device(LOCAL_RANK)
         device = torch.device('cuda', LOCAL_RANK)
+        print(f'==count: {torch.cuda.device_count()}, device: {device}===')
         dist.init_process_group(backend="nccl" if dist.is_nccl_available() else "gloo")
 
     # Train
