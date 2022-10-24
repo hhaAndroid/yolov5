@@ -128,6 +128,8 @@ def run(
         compute_loss=None,
         logger=None
 ):
+    save_json = True
+
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -307,7 +309,7 @@ def run(
         w = Path(weights[0] if isinstance(weights, list) else weights).stem if weights is not None else ''  # weights
         anno_json = str(Path(data.get('path', '../coco')) / 'annotations/instances_val2017.json')  # annotations json
         pred_json = str(save_dir / f"{w}_predictions.json")  # predictions json
-        LOGGER.info(f'\nEvaluating pycocotools mAP... saving {pred_json}...')
+        logger.info(f'\nEvaluating pycocotools mAP... saving {pred_json}...')
         with open(pred_json, 'w') as f:
             json.dump(jdict, f)
 
@@ -328,6 +330,7 @@ def run(
             redirect_string = io.StringIO()
             with contextlib.redirect_stdout(redirect_string):
                 eval.summarize()
+            logger.info(redirect_string.getvalue())
 
             map, map50 = eval.stats[:2]  # update results (mAP@0.5:0.95, mAP@0.5)
         except Exception as e:
