@@ -399,12 +399,12 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
             # Log
             if RANK in (-1, 0) and (i + 1) % log_interval == 0:
-                mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
+                # mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
                 # pbar.set_description(('%10s' * 2 + '%10.4g' * 5) %
                 #                      (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
                 logger.info(('%10s' * 3 + '%10.4g' * 5) %
-                            (f'{i + 1}/{len(train_loader)}', f'{epoch + 1}/{epochs}', mem, *mloss, targets.shape[0],
+                            (f'{i + 1}/{len(train_loader)}', f'{epoch + 1}/{epochs}', mem, *loss_items, targets.shape[0],
                              imgs.shape[-1]))
 
                 log_buffer.average(log_interval)
@@ -445,7 +445,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                                                  save_dir=save_dir,
                                                  plots=False,
                                                  callbacks=callbacks,
-                                                 compute_loss=compute_loss,
+                                                 compute_loss=None,
                                                  logger=logger)
 
                     # Update best mAP
@@ -508,7 +508,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                         verbose=True,
                         plots=False,
                         callbacks=callbacks,
-                        compute_loss=compute_loss,
+                        compute_loss=None,
                         logger=logger)  # val best model with plots
                     if is_coco:
                         callbacks.run('on_fit_epoch_end', list(mloss) + list(results) + lr, epoch, best_fitness, fi)
