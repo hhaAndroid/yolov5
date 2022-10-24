@@ -464,8 +464,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                             'ema': deepcopy(ema.ema).half(),
                             'updates': ema.updates,
                             'optimizer': optimizer.state_dict(),
-                            'opt': vars(opt),
-                            'date': datetime.now().isoformat()}
+                            'opt': vars(opt)}
 
                         # Save last, best and delete
                         torch.save(ckpt, last)
