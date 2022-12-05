@@ -346,19 +346,19 @@ def check_git_status(repo='ultralytics/yolov5', branch='master'):
 @WorkingDirectory(ROOT)
 def check_git_info(path='.'):
     # YOLOv5 git info check, return {remote, branch, commit}
-    check_requirements('gitpython')
-    import git
-    try:
-        repo = git.Repo(path)
-        remote = repo.remotes.origin.url.replace('.git', '')  # i.e. 'https://github.com/ultralytics/yolov5'
-        commit = repo.head.commit.hexsha  # i.e. '3134699c73af83aac2a481435550b968d5792c0d'
-        try:
-            branch = repo.active_branch.name  # i.e. 'main'
-        except TypeError:  # not on any branch
-            branch = None  # i.e. 'detached HEAD' state
-        return {'remote': remote, 'branch': branch, 'commit': commit}
-    except git.exc.InvalidGitRepositoryError:  # path is not a git dir
-        return {'remote': None, 'branch': None, 'commit': None}
+    # check_requirements('gitpython')
+    # import git
+    # try:
+    #     repo = git.Repo(path)
+    #     remote = repo.remotes.origin.url.replace('.git', '')  # i.e. 'https://github.com/ultralytics/yolov5'
+    #     commit = repo.head.commit.hexsha  # i.e. '3134699c73af83aac2a481435550b968d5792c0d'
+    #     try:
+    #         branch = repo.active_branch.name  # i.e. 'main'
+    #     except TypeError:  # not on any branch
+    #         branch = None  # i.e. 'detached HEAD' state
+    #     return {'remote': remote, 'branch': branch, 'commit': commit}
+    # except git.exc.InvalidGitRepositoryError:  # path is not a git dir
+    return {'remote': None, 'branch': None, 'commit': None}
 
 
 def check_python(minimum='3.7.0'):
