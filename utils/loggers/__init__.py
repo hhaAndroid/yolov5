@@ -325,7 +325,7 @@ class GenericLogger:
         include:         loggers to include
     """
 
-    def __init__(self, opt, console_logger, include=('tb', 'wandb')):
+    def __init__(self, opt, console_logger, include=[]):
         # init default loggers
         self.save_dir = Path(opt.save_dir)
         self.include = include
