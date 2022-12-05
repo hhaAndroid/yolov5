@@ -107,7 +107,7 @@ class ComputeLoss:
         lseg *= self.hyp["box"] / bs
 
         loss = lbox + lobj + lcls + lseg
-        return loss * bs, torch.cat((lbox, lseg, lobj, lcls)).detach()
+        return loss * bs, [lbox.detach() * bs, lobj.detach() * bs, lcls.detach() * bs, lseg.detach() * bs]
 
     def single_mask_loss(self, gt_mask, pred, proto, xyxy, area):
         # Mask loss for one image
