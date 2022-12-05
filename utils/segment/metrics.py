@@ -10,8 +10,8 @@ from ..metrics import ap_per_class
 
 def fitness(x):
     # Model fitness as a weighted combination of metrics
-    w = [0.0, 0.0, 0.1, 0.9, 0.0, 0.0, 0.1, 0.9]
-    return (x[:, :8] * w).sum(1)
+    w = [0.1, 0.9]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95]
+    return (x[:, :2] * w).sum(1)
 
 
 def ap_per_class_box_and_mask(

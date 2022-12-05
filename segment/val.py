@@ -157,6 +157,7 @@ def run(
         mask_downsample_ratio=1,
         compute_loss=None,
         callbacks=Callbacks(),
+        logger=None
 ):
     if save_json:
         check_requirements(['pycocotools'])
@@ -190,7 +191,7 @@ def run(
             device = model.device
             if not (pt or jit):
                 batch_size = 1  # export.py models default to batch-size 1
-                LOGGER.info(f'Forcing --batch-size 1 square inference (1,3,{imgsz},{imgsz}) for non-PyTorch models')
+                logger.info(f'Forcing --batch-size 1 square inference (1,3,{imgsz},{imgsz}) for non-PyTorch models')
 
         # Data
         data = check_dataset(data)  # check
@@ -342,20 +343,20 @@ def run(
 
     # Print results
     pf = '%22s' + '%11i' * 2 + '%11.3g' * 8  # print format
-    LOGGER.info(pf % ("all", seen, nt.sum(), *metrics.mean_results()))
+    logger.info(pf % ("all", seen, nt.sum(), *metrics.mean_results()))
     if nt.sum() == 0:
-        LOGGER.warning(f'WARNING ⚠️ no labels found in {task} set, can not compute metrics without labels')
+        logger.warning(f'WARNING ⚠️ no labels found in {task} set, can not compute metrics without labels')
 
     # Print results per class
     if (verbose or (nc < 50 and not training)) and nc > 1 and len(stats):
         for i, c in enumerate(metrics.ap_class_index):
-            LOGGER.info(pf % (names[c], seen, nt[c], *metrics.class_result(i)))
+            logger.info(pf % (names[c], seen, nt[c], *metrics.class_result(i)))
 
     # Print speeds
     t = tuple(x.t / seen * 1E3 for x in dt)  # speeds per image
     if not training:
         shape = (batch_size, 3, imgsz, imgsz)
-        LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {shape}' % t)
+        logger.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {shape}' % t)
 
     # Plots
     if plots:
@@ -369,7 +370,7 @@ def run(
         w = Path(weights[0] if isinstance(weights, list) else weights).stem if weights is not None else ''  # weights
         anno_json = str(Path('../datasets/coco/annotations/instances_val2017.json'))  # annotations
         pred_json = str(save_dir / f"{w}_predictions.json")  # predictions
-        LOGGER.info(f'\nEvaluating pycocotools mAP... saving {pred_json}...')
+        logger.info(f'\nEvaluating pycocotools mAP... saving {pred_json}...')
         with open(pred_json, 'w') as f:
             json.dump(jdict, f)
 
@@ -377,7 +378,7 @@ def run(
             from pycocotools.coco import COCO
             from pycocotools.cocoeval import COCOeval
 
-            anno = COCO(anno_json)  # init annotations api
+            anno = COCO('/nvme/huanghaian/coco/annotations/instance_val2017.json')  # init annotations api
             pred = anno.loadRes(pred_json)  # init predictions api
             results = []
             for eval in COCOeval(anno, pred, 'bbox'), COCOeval(anno, pred, 'segm'):
@@ -389,13 +390,13 @@ def run(
                 results.extend(eval.stats[:2])  # update results (mAP@0.5:0.95, mAP@0.5)
             map_bbox, map50_bbox, map_mask, map50_mask = results
         except Exception as e:
-            LOGGER.info(f'pycocotools unable to run: {e}')
+            logger.info(f'pycocotools unable to run: {e}')
 
     # Return results
     model.float()  # for training
     if not training:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
-        LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
+        logger.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
     final_metric = mp_bbox, mr_bbox, map50_bbox, map_bbox, mp_mask, mr_mask, map50_mask, map_mask
     return (*final_metric, *(loss.cpu() / len(dataloader)).tolist()), metrics.get_maps(nc), t
 
