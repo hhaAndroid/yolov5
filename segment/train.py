@@ -443,7 +443,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                                                 save_dir=save_dir,
                                                 plots=False,
                                                 callbacks=callbacks,
-                                                compute_loss=compute_loss,
+                                                compute_loss=None,
                                                 mask_downsample_ratio=mask_ratio,
                                                 overlap=overlap,
                                                 logger=logger)
@@ -523,7 +523,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                         verbose=True,
                         plots=plots,
                         callbacks=callbacks,
-                        compute_loss=compute_loss,
+                        compute_loss=None,
                         mask_downsample_ratio=mask_ratio,
                         overlap=overlap,
                         logger=logger)  # val best model with plots
