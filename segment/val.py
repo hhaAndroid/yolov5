@@ -378,7 +378,7 @@ def run(
             from pycocotools.coco import COCO
             from pycocotools.cocoeval import COCOeval
 
-            anno = COCO('/nvme/huanghaian/coco/annotations/instance_val2017.json')  # init annotations api
+            anno = COCO('/nvme/huanghaian/coco/annotations/instances_val2017.json')  # init annotations api
             pred = anno.loadRes(pred_json)  # init predictions api
             results = []
             for eval in COCOeval(anno, pred, 'bbox'), COCOeval(anno, pred, 'segm'):
